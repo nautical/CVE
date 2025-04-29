@@ -12,6 +12,7 @@
 #include <cstring>
 #include <sstream>
 #include <iomanip>
+#include <ctime>
 
 namespace fs = std::filesystem;
 
@@ -20,6 +21,11 @@ const std::string WINDOW_NAME = "IotSender";
 const int SEND_IOT_COM = 0x8000;
 const int SEND_IOT_LOG = 0x8001;
 const std::string DEFAULT_AES_KEY = "Gemini";
+
+// Logging configuration
+const std::string LOG_DIR = "fuzzer_logs";
+const std::string CRASH_LOG = "crashes.log";
+const std::string TEST_LOG = "tests.log";
 
 // Sample connection strings
 const std::string SAMPLE_COMMAND_KEY = "HostName=GeminiIoTHub.azure-devices.net;SharedAccessKeyName=iothubowner;SharedAccessKey=PRhgBKV9FQWI836MOg7TWWTxd7qrVKWbaAIoTCihtdE=;DeviceId=";
@@ -41,107 +47,217 @@ std::string PadKey(const std::string& key);
 std::string Base64Encode(const std::vector<BYTE>& data);
 std::vector<BYTE> Base64Decode(const std::string& data);
 
-int main(int argc, char* argv[]) {
-    std::string workingPath = "C:\\Program Files (x86)\\G1200\\IotTemp";
+// Function to get current timestamp
+std::string GetTimestamp() {
+    auto now = std::chrono::system_clock::now();
+    auto time = std::chrono::system_clock::to_time_t(now);
+    std::stringstream ss;
+    ss << std::put_time(std::localtime(&time), "%Y-%m-%d %H:%M:%S");
+    return ss.str();
+}
+
+// Enhanced logging function
+void LogEvent(const std::string& message, const std::string& logFile = TEST_LOG) {
+    std::string timestamp = GetTimestamp();
+    fs::path logPath = fs::path(LOG_DIR) / logFile;
     
+    std::ofstream log(logPath.string(), std::ios::app);
+    if (log.is_open()) {
+        log << "[" << timestamp << "] " << message << std::endl;
+        log.close();
+    }
+    
+    std::cout << "[" << timestamp << "] " << message << std::endl;
+}
+
+// Function to check if process is still running
+bool IsProcessRunning(HWND hWnd) {
+    if (hWnd == NULL) return false;
+    DWORD processId;
+    GetWindowThreadProcessId(hWnd, &processId);
+    HANDLE hProcess = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, processId);
+    if (hProcess == NULL) return false;
+    
+    DWORD exitCode;
+    GetExitCodeProcess(hProcess, &exitCode);
+    CloseHandle(hProcess);
+    return exitCode == STILL_ACTIVE;
+}
+
+int main(int argc, char* argv[]) {
+    // Create log directory
+    fs::create_directories(LOG_DIR);
+    
+    std::string workingPath = "C:\\Program Files (x86)\\G1200\\IotTemp";
     if (argc > 1) {
         workingPath = argv[1];
-        std::cout << "Using custom working path: " << workingPath << std::endl;
+        LogEvent("Using custom working path: " + workingPath);
     }
-
-    std::cout << "IotSender Fuzzer - Security Testing Tool" << std::endl;
-    std::cout << "=======================================" << std::endl;
-
+    
+    LogEvent("IotSender Fuzzer - Security Testing Tool");
+    LogEvent("=======================================");
+    
     EnsureDirectoryExists(workingPath);
     StartIotSenderIfNeeded();
-
+    
     try {
         HWND hWnd = FindWindowA(NULL, WINDOW_NAME.c_str());
         if (hWnd == NULL) {
-            std::cout << "IotSender window not found!" << std::endl;
+            LogEvent("IotSender window not found!");
             return 1;
         }
-
+        
         // Run fuzzing routines
         WindowsMessageFuzzer(hWnd);
         CSVFileFuzzer(workingPath);
         PathFuzzer(workingPath);
         IniFileFuzzer(workingPath);
         CryptoFuzzer();
-
-        std::cout << "Fuzzing completed." << std::endl;
+        
+        LogEvent("Fuzzing completed.");
     }
     catch (const std::exception& ex) {
-        std::cout << "Fatal error: " << ex.what() << std::endl;
+        LogEvent("Fatal error: " + std::string(ex.what()));
         return 1;
     }
-
-    std::cout << "Press any key to exit..." << std::endl;
+    
+    LogEvent("Press any key to exit...");
     std::cin.get();
     return 0;
 }
 
 void WindowsMessageFuzzer(HWND hWnd) {
-    std::cout << "\nStarting Windows Message Fuzzing..." << std::endl;
-
+    LogEvent("Starting Windows Message Fuzzing...");
+    
     // Test standard messages
-    std::cout << "Testing standard messages..." << std::endl;
+    LogEvent("Testing standard messages...");
     SendMessage(hWnd, SEND_IOT_COM, 0, 0);
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    
+    if (!IsProcessRunning(hWnd)) {
+        LogEvent("CRASH DETECTED: Process terminated after SEND_IOT_COM", CRASH_LOG);
+        return;
+    }
+    
     SendMessage(hWnd, SEND_IOT_LOG, 0, 0);
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
-
+    
+    if (!IsProcessRunning(hWnd)) {
+        LogEvent("CRASH DETECTED: Process terminated after SEND_IOT_LOG", CRASH_LOG);
+        return;
+    }
+    
     // Fuzz with random message IDs
-    std::cout << "Fuzzing with random message IDs..." << std::endl;
+    LogEvent("Fuzzing with random message IDs...");
     std::random_device rd;
     std::mt19937 gen(rd());
     std::uniform_int_distribution<> dis(0x7000, 0x9000);
-
+    
     for (int i = 0; i < 100; i++) {
         int randomMsg = dis(gen);
+        std::stringstream ss;
+        ss << "Testing message ID: 0x" << std::hex << randomMsg;
+        LogEvent(ss.str());
+        
         SendMessage(hWnd, randomMsg, 0, 0);
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        
+        if (!IsProcessRunning(hWnd)) {
+            ss.str("");
+            ss << "CRASH DETECTED: Process terminated after message 0x" << std::hex << randomMsg;
+            LogEvent(ss.str(), CRASH_LOG);
+            return;
+        }
     }
-
+    
     // Fuzz with wParam and lParam
-    std::cout << "Fuzzing with wParam and lParam..." << std::endl;
+    LogEvent("Fuzzing with wParam and lParam...");
     for (int i = 0; i < 50; i++) {
         WPARAM wParam = dis(gen);
         LPARAM lParam = dis(gen);
         
+        std::stringstream ss;
+        ss << "Testing wParam: 0x" << std::hex << wParam << ", lParam: 0x" << lParam;
+        LogEvent(ss.str());
+        
         SendMessage(hWnd, SEND_IOT_COM, wParam, lParam);
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        
+        if (!IsProcessRunning(hWnd)) {
+            ss.str("");
+            ss << "CRASH DETECTED: Process terminated after SEND_IOT_COM with wParam: 0x" 
+               << std::hex << wParam << ", lParam: 0x" << lParam;
+            LogEvent(ss.str(), CRASH_LOG);
+            return;
+        }
+        
         SendMessage(hWnd, SEND_IOT_LOG, wParam, lParam);
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        
+        if (!IsProcessRunning(hWnd)) {
+            ss.str("");
+            ss << "CRASH DETECTED: Process terminated after SEND_IOT_LOG with wParam: 0x" 
+               << std::hex << wParam << ", lParam: 0x" << lParam;
+            LogEvent(ss.str(), CRASH_LOG);
+            return;
+        }
     }
 }
 
 void CSVFileFuzzer(const std::string& workingPath) {
-    std::cout << "\nStarting CSV File Fuzzing..." << std::endl;
+    LogEvent("Starting CSV File Fuzzing...");
     fs::path commandFilePath = fs::path(workingPath) / "Command.csv";
-
+    
     std::vector<std::string> fuzzTypes = {
         "Valid", "ExtraColumns", "MissingColumns", "InvalidValues",
         "SpecialChars", "VeryLongValues", "EmptyFile", "Unicode",
         "BufferOverflow", "SQLInjection", "CommandInjection"
     };
-
+    
+    HWND hWnd = FindWindowA(NULL, WINDOW_NAME.c_str());
+    if (hWnd == NULL) {
+        LogEvent("IotSender window not found!");
+        return;
+    }
+    
     for (const auto& fuzzType : fuzzTypes) {
-        std::cout << "Testing " << fuzzType << " CSV format..." << std::endl;
-        std::string csvContent = GenerateCSVContent(fuzzType);
+        std::stringstream ss;
+        ss << "Testing " << fuzzType << " CSV format...";
+        LogEvent(ss.str());
         
-        std::ofstream file(commandFilePath);
+        std::string csvContent = GenerateCSVContent(fuzzType);
+        std::ofstream file(commandFilePath.string());
         if (file.is_open()) {
             file << csvContent;
             file.close();
-        }
-
-        HWND hWnd = FindWindowA(NULL, WINDOW_NAME.c_str());
-        if (hWnd != NULL) {
+            
+            // Save test case
+            fs::path testCasePath = fs::path(LOG_DIR) / ("testcase_" + fuzzType + ".csv");
+            std::ofstream testCase(testCasePath.string());
+            if (testCase.is_open()) {
+                testCase << csvContent;
+                testCase.close();
+            }
+            
             SendMessage(hWnd, SEND_IOT_COM, 0, 0);
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+            
+            if (!IsProcessRunning(hWnd)) {
+                ss.str("");
+                ss << "CRASH DETECTED: Process terminated after " << fuzzType << " CSV test";
+                LogEvent(ss.str(), CRASH_LOG);
+                return;
+            }
+            
             SendMessage(hWnd, SEND_IOT_LOG, 0, 0);
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+            
+            if (!IsProcessRunning(hWnd)) {
+                ss.str("");
+                ss << "CRASH DETECTED: Process terminated after " << fuzzType << " CSV test";
+                LogEvent(ss.str(), CRASH_LOG);
+                return;
+            }
         }
     }
 }
@@ -415,6 +531,13 @@ void EnsureDirectoryExists(const std::string& path) {
 }
 
 std::string EncryptString(const std::string& plainText, const std::string& key) {
+    if (plainText.empty()) {
+        throw std::runtime_error("Plain text cannot be empty");
+    }
+    if (key.empty()) {
+        throw std::runtime_error("Key cannot be empty");
+    }
+
     HCRYPTPROV hProv = 0;
     HCRYPTHASH hHash = 0;
     HCRYPTKEY hKey = 0;
@@ -423,36 +546,42 @@ std::string EncryptString(const std::string& plainText, const std::string& key) 
     try {
         // Get handle to the default provider
         if (!CryptAcquireContext(&hProv, NULL, NULL, PROV_RSA_AES, CRYPT_VERIFYCONTEXT)) {
-            throw std::runtime_error("CryptAcquireContext failed");
+            DWORD error = GetLastError();
+            throw std::runtime_error("CryptAcquireContext failed with error: " + std::to_string(error));
         }
 
         // Create hash object
         if (!CryptCreateHash(hProv, CALG_SHA_256, 0, 0, &hHash)) {
-            throw std::runtime_error("CryptCreateHash failed");
+            DWORD error = GetLastError();
+            throw std::runtime_error("CryptCreateHash failed with error: " + std::to_string(error));
         }
 
         // Hash the key
         if (!CryptHashData(hHash, (BYTE*)key.c_str(), key.length(), 0)) {
-            throw std::runtime_error("CryptHashData failed");
+            DWORD error = GetLastError();
+            throw std::runtime_error("CryptHashData failed with error: " + std::to_string(error));
         }
 
         // Derive key from hash
         if (!CryptDeriveKey(hProv, CALG_AES_256, hHash, 0, &hKey)) {
-            throw std::runtime_error("CryptDeriveKey failed");
+            DWORD error = GetLastError();
+            throw std::runtime_error("CryptDeriveKey failed with error: " + std::to_string(error));
         }
 
         // Determine buffer size
         DWORD dataLen = plainText.length();
         DWORD bufferLen = dataLen;
         if (!CryptEncrypt(hKey, 0, TRUE, 0, NULL, &bufferLen, 0)) {
-            throw std::runtime_error("CryptEncrypt failed");
+            DWORD error = GetLastError();
+            throw std::runtime_error("CryptEncrypt (size) failed with error: " + std::to_string(error));
         }
 
         // Encrypt data
         encryptedData.resize(bufferLen);
         memcpy(encryptedData.data(), plainText.c_str(), dataLen);
         if (!CryptEncrypt(hKey, 0, TRUE, 0, encryptedData.data(), &dataLen, bufferLen)) {
-            throw std::runtime_error("CryptEncrypt failed");
+            DWORD error = GetLastError();
+            throw std::runtime_error("CryptEncrypt failed with error: " + std::to_string(error));
         }
         encryptedData.resize(dataLen);
 
@@ -473,6 +602,13 @@ std::string EncryptString(const std::string& plainText, const std::string& key) 
 }
 
 std::string DecryptString(const std::string& cipherText, const std::string& key) {
+    if (cipherText.empty()) {
+        throw std::runtime_error("Cipher text cannot be empty");
+    }
+    if (key.empty()) {
+        throw std::runtime_error("Key cannot be empty");
+    }
+
     HCRYPTPROV hProv = 0;
     HCRYPTHASH hHash = 0;
     HCRYPTKEY hKey = 0;
@@ -481,22 +617,26 @@ std::string DecryptString(const std::string& cipherText, const std::string& key)
     try {
         // Get handle to the default provider
         if (!CryptAcquireContext(&hProv, NULL, NULL, PROV_RSA_AES, CRYPT_VERIFYCONTEXT)) {
-            throw std::runtime_error("CryptAcquireContext failed");
+            DWORD error = GetLastError();
+            throw std::runtime_error("CryptAcquireContext failed with error: " + std::to_string(error));
         }
 
         // Create hash object
         if (!CryptCreateHash(hProv, CALG_SHA_256, 0, 0, &hHash)) {
-            throw std::runtime_error("CryptCreateHash failed");
+            DWORD error = GetLastError();
+            throw std::runtime_error("CryptCreateHash failed with error: " + std::to_string(error));
         }
 
         // Hash the key
         if (!CryptHashData(hHash, (BYTE*)key.c_str(), key.length(), 0)) {
-            throw std::runtime_error("CryptHashData failed");
+            DWORD error = GetLastError();
+            throw std::runtime_error("CryptHashData failed with error: " + std::to_string(error));
         }
 
         // Derive key from hash
         if (!CryptDeriveKey(hProv, CALG_AES_256, hHash, 0, &hKey)) {
-            throw std::runtime_error("CryptDeriveKey failed");
+            DWORD error = GetLastError();
+            throw std::runtime_error("CryptDeriveKey failed with error: " + std::to_string(error));
         }
 
         // Decode base64
@@ -505,7 +645,8 @@ std::string DecryptString(const std::string& cipherText, const std::string& key)
         // Decrypt data
         DWORD dataLen = encryptedData.size();
         if (!CryptDecrypt(hKey, 0, TRUE, 0, encryptedData.data(), &dataLen)) {
-            throw std::runtime_error("CryptDecrypt failed");
+            DWORD error = GetLastError();
+            throw std::runtime_error("CryptDecrypt failed with error: " + std::to_string(error));
         }
 
         // Clean up
