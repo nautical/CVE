@@ -202,6 +202,36 @@ void WindowsMessageFuzzer(HWND hWnd) {
             return;
         }
     }
+
+    // New targeted fuzzing around crash-inducing values
+    LogEvent("Starting targeted fuzzing around crash-inducing values...");
+    const WPARAM crashWParam = 0x8221;
+    const LPARAM crashLParam = 0x82fc;
+    
+    // Create distributions for targeted fuzzing
+    std::uniform_int_distribution<> wParamDis(crashWParam - 0x100, crashWParam + 0x100);
+    std::uniform_int_distribution<> lParamDis(crashLParam - 0x100, crashLParam + 0x100);
+    
+    // Test 500 variations around the crash-inducing values
+    for (int i = 0; i < 500; i++) {
+        WPARAM wParam = wParamDis(gen);
+        LPARAM lParam = lParamDis(gen);
+        
+        std::stringstream ss;
+        ss << "Testing targeted wParam: 0x" << std::hex << wParam << ", lParam: 0x" << lParam;
+        LogEvent(ss.str());
+        
+        SendMessage(hWnd, SEND_IOT_COM, wParam, lParam);
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        
+        if (!IsProcessRunning(hWnd)) {
+            ss.str("");
+            ss << "CRASH DETECTED: Process terminated after SEND_IOT_COM with wParam: 0x" 
+               << std::hex << wParam << ", lParam: 0x" << lParam;
+            LogEvent(ss.str(), CRASH_LOG);
+            return;
+        }
+    }
 }
 
 void CSVFileFuzzer(const std::string& workingPath) {
