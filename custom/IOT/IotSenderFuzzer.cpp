@@ -46,6 +46,7 @@ std::string DecryptString(const std::string& cipherText, const std::string& key)
 std::string PadKey(const std::string& key);
 std::string Base64Encode(const std::vector<BYTE>& data);
 std::vector<BYTE> Base64Decode(const std::string& data);
+void PrepareCSVTestFiles(const std::string& workingPath);
 
 // Function to get current timestamp
 std::string GetTimestamp() {
@@ -98,6 +99,7 @@ int main(int argc, char* argv[]) {
     LogEvent("=======================================");
     
     EnsureDirectoryExists(workingPath);
+    PrepareCSVTestFiles(workingPath);
     StartIotSenderIfNeeded();
     
     try {
@@ -735,4 +737,88 @@ std::vector<BYTE> Base64Decode(const std::string& data) {
 
     result.resize(decodedSize);
     return result;
+}
+
+void PrepareCSVTestFiles(const std::string& workingPath) {
+    LogEvent("Preparing CSV test files...");
+    fs::path commandFilePath = fs::path(workingPath) / "Command.csv";
+    fs::path testFilesDir = fs::path(workingPath) / "test_files";
+    
+    // Create test files directory
+    EnsureDirectoryExists(testFilesDir.string());
+    
+    // Prepare various test cases
+    std::vector<std::pair<std::string, std::string>> testCases = {
+        // Basic valid case
+        {"valid.csv", "10\t1\t1\tAA999999B\tAA999999B\t\t1\t1\t20230101\t123456\t0\t1\t0\t15\t17.5\t18.2\t123456\t1\t1.234\t2.345\t3.456\tTEST_MEMO"},
+        
+        // Extra columns
+        {"extra_columns.csv", "10\t1\t1\tAA999999B\tAA999999B\t\t1\t1\t20230101\t123456\t0\t1\t0\t15\t17.5\t18.2\t123456\t1\t1.234\t2.345\t3.456\tTEST_MEMO\tEXTRA1\tEXTRA2\tEXTRA3"},
+        
+        // Missing columns
+        {"missing_columns.csv", "10\t1\t1\tAA999999B"},
+        
+        // Invalid values
+        {"invalid_values.csv", "999\t999\t999\tAA999999B\tAA999999B\t\t-1\t-1\t99999999\t999999\t9\t9\t9\t999\t999.9\t999.9\t999999\t9\t999.9\t999.9\t999.9\tTEST_MEMO"},
+        
+        // Special characters
+        {"special_chars.csv", "10\t1\t1\t!@#$%^&*()\t!@#$%^&*()\t\t1\t1\t20230101\t123456\t0\t1\t0\t15\t17.5\t18.2\t123456\t1\t1.234\t2.345\t3.456\t</script><script>alert(1)</script>"},
+        
+        // Very long values
+        {"long_values.csv", "10\t1\t1\t" + std::string(1000, 'A') + "\t" + std::string(1000, 'B') + "\t\t1\t1\t20230101\t123456\t0\t1\t0\t15\t17.5\t18.2\t123456\t1\t1.234\t2.345\t3.456\t" + std::string(5000, 'C')},
+        
+        // Empty file
+        {"empty.csv", ""},
+        
+        // Unicode characters
+        {"unicode.csv", "10\t1\t1\tЖЖЖЖиии\tЖЖЖЖиии\t\t1\t1\t20230101\t123456\t0\t1\t0\t15\t17.5\t18.2\t123456\t1\t1.234\t2.345\t3.456\t你好世界"},
+        
+        // Buffer overflow attempt
+        {"buffer_overflow.csv", "10\t1\t1\t" + std::string(8192, 'A') + "\t" + std::string(8192, 'B')},
+        
+        // SQL injection attempt
+        {"sql_injection.csv", "10\t1\t1\t'; DROP TABLE users; --\tAA999999B\t\t1\t1\t20230101\t123456\t0\t1\t0\t15\t17.5\t18.2\t123456\t1\t1.234\t2.345\t3.456\tTEST_MEMO"},
+        
+        // Command injection attempt
+        {"command_injection.csv", "10\t1\t1\t`calc.exe`\tAA999999B\t\t1\t1\t20230101\t123456\t0\t1\t0\t15\t17.5\t18.2\t123456\t1\t1.234\t2.345\t3.456\tTEST_MEMO"},
+        
+        // Path traversal attempt
+        {"path_traversal.csv", "70\t1\t1\tAA999999B\tAA999999B\t..\\..\\..\\Windows\\win.ini\t1"},
+        
+        // Null bytes
+        {"null_bytes.csv", "10\t1\t1\tAA999999B\0\tAA999999B\t\t1\t1\t20230101\t123456\t0\t1\t0\t15\t17.5\t18.2\t123456\t1\t1.234\t2.345\t3.456\tTEST_MEMO"},
+        
+        // Line feed injection
+        {"line_feed.csv", "10\t1\t1\tAA999999B\tAA999999B\t\t1\t1\t20230101\t123456\t0\t1\t0\t15\t17.5\t18.2\t123456\t1\t1.234\t2.345\t3.456\tTEST\nMEMO"},
+        
+        // Carriage return injection
+        {"carriage_return.csv", "10\t1\t1\tAA999999B\tAA999999B\t\t1\t1\t20230101\t123456\t0\t1\t0\t15\t17.5\t18.2\t123456\t1\t1.234\t2.345\t3.456\tTEST\rMEMO"},
+        
+        // Tab injection
+        {"tab_injection.csv", "10\t1\t1\tAA999999B\tAA999999B\t\t1\t1\t20230101\t123456\t0\t1\t0\t15\t17.5\t18.2\t123456\t1\t1.234\t2.345\t3.456\tTEST\tMEMO"},
+        
+        // Multiple commands
+        {"multiple_commands.csv", "10\t1\t1\tAA999999B\tAA999999B\t\t1\t1\t20230101\t123456\t0\t1\t0\t15\t17.5\t18.2\t123456\t1\t1.234\t2.345\t3.456\tTEST_MEMO\n20\t1\t1\tBB999999B\tBB999999B\t\t1\t1\t20230101\t123456\t0\t1\t0\t15\t17.5\t18.2\t123456\t1\t1.234\t2.345\t3.456\tTEST_MEMO2"}
+    };
+    
+    // Create each test file
+    for (const auto& testCase : testCases) {
+        fs::path filePath = testFilesDir / testCase.first;
+        std::ofstream file(filePath);
+        if (file.is_open()) {
+            file << testCase.second;
+            file.close();
+            LogEvent("Created test file: " + testCase.first);
+        }
+    }
+    
+    // Create the main Command.csv file with a valid test case
+    std::ofstream commandFile(commandFilePath);
+    if (commandFile.is_open()) {
+        commandFile << "10\t1\t1\tAA999999B\tAA999999B\t\t1\t1\t20230101\t123456\t0\t1\t0\t15\t17.5\t18.2\t123456\t1\t1.234\t2.345\t3.456\tTEST_MEMO";
+        commandFile.close();
+        LogEvent("Created main Command.csv file");
+    }
+    
+    LogEvent("CSV test files preparation completed");
 } 
