@@ -94,15 +94,15 @@ LRESULT CALLBACK MessageProc(int nCode, WPARAM wParam, LPARAM lParam) {
         return CallNextHookEx(messageHook, nCode, wParam, lParam);
     }
     
-    // Process window messages
+    // Process window messages for WH_CALLWNDPROC hook
     if (nCode == HC_ACTION) {
-        MSG* msg = (MSG*)lParam;
+        CWPSTRUCT* cwp = (CWPSTRUCT*)lParam;
         
         // Check if the message is for our target window
-        if (msg->hwnd == targetWindow || GetParent(msg->hwnd) == targetWindow) {
+        if (cwp->hwnd == targetWindow || GetParent(cwp->hwnd) == targetWindow) {
             // Log WM_CHAR messages which represent character input
-            if (msg->message == WM_CHAR) {
-                char c = (char)msg->wParam;
+            if (cwp->message == WM_CHAR) {
+                char c = (char)cwp->wParam;
                 std::string displayChar = isprint(c) ? std::string(1, c) : "ASCII(" + std::to_string((int)c) + ")";
                 
                 HWND foregroundWindow = GetForegroundWindow();
@@ -120,8 +120,8 @@ LRESULT CALLBACK MessageProc(int nCode, WPARAM wParam, LPARAM lParam) {
                 std::cout << "WM_CHAR: " << displayChar << " (Window: " << windowTitle << ")" << std::endl;
             }
             // Also log keydown/keyup messages
-            else if (msg->message == WM_KEYDOWN || msg->message == WM_SYSKEYDOWN) {
-                DWORD vkCode = (DWORD)msg->wParam;
+            else if (cwp->message == WM_KEYDOWN || cwp->message == WM_SYSKEYDOWN) {
+                DWORD vkCode = (DWORD)cwp->wParam;
                 std::string keyName = getKeyName(vkCode);
                 
                 HWND foregroundWindow = GetForegroundWindow();
@@ -139,8 +139,8 @@ LRESULT CALLBACK MessageProc(int nCode, WPARAM wParam, LPARAM lParam) {
                 // Print to console as well
                 std::cout << "KeyDown: " << keyName << " (Window: " << windowTitle << ")" << std::endl;
             }
-            else if (msg->message == WM_KEYUP || msg->message == WM_SYSKEYUP) {
-                DWORD vkCode = (DWORD)msg->wParam;
+            else if (cwp->message == WM_KEYUP || cwp->message == WM_SYSKEYUP) {
+                DWORD vkCode = (DWORD)cwp->wParam;
                 std::string keyName = getKeyName(vkCode);
                 
                 HWND foregroundWindow = GetForegroundWindow();
@@ -158,6 +158,63 @@ LRESULT CALLBACK MessageProc(int nCode, WPARAM wParam, LPARAM lParam) {
                 // Print to console as well
                 std::cout << "KeyUp: " << keyName << " (Window: " << windowTitle << ")" << std::endl;
             }
+            
+            // Log all messages for debugging
+            if (logFile.is_open()) {
+                logFile << getCurrentTimestamp() << " - " 
+                        << "Message: 0x" << std::hex << cwp->message << std::dec << " | "
+                        << "wParam: " << cwp->wParam << " | "
+                        << "lParam: " << cwp->lParam << std::endl;
+            }
+        }
+    }
+    
+    // Pass to next hook
+    return CallNextHookEx(messageHook, nCode, wParam, lParam);
+}
+
+// Callback function for system-wide keyboard hook
+LRESULT CALLBACK KeyboardHookProc(int nCode, WPARAM wParam, LPARAM lParam) {
+    // If nCode is less than zero, pass to next hook
+    if (nCode < 0) {
+        return CallNextHookEx(messageHook, nCode, wParam, lParam);
+    }
+    
+    // Process keyboard events
+    if (nCode == HC_ACTION) {
+        KBDLLHOOKSTRUCT* kbdStruct = (KBDLLHOOKSTRUCT*)lParam;
+        
+        // Only process keyboard events when our window is in focus
+        HWND foregroundWindow = GetForegroundWindow();
+        if (foregroundWindow == targetWindow || GetParent(foregroundWindow) == targetWindow) {
+            std::string eventType;
+            if (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN) {
+                eventType = "Key Down";
+            } else if (wParam == WM_KEYUP || wParam == WM_SYSKEYUP) {
+                eventType = "Key Up";
+            } else {
+                eventType = "Other";
+            }
+            
+            // Get name of the key
+            std::string keyName = getKeyName(kbdStruct->vkCode);
+            
+            // Get window title
+            char windowTitle[256] = {0};
+            GetWindowTextA(foregroundWindow, windowTitle, sizeof(windowTitle));
+            
+            // Log the key event
+            if (logFile.is_open()) {
+                logFile << getCurrentTimestamp() << " - " 
+                        << "Event: " << eventType << " | "
+                        << "Key: " << keyName << " | "
+                        << "Window: " << windowTitle << " | "
+                        << "VK Code: " << kbdStruct->vkCode << " | "
+                        << "Scan Code: " << kbdStruct->scanCode << std::endl;
+            }
+            
+            // Print to console as well
+            std::cout << eventType << ": " << keyName << " (Window: " << windowTitle << ")" << std::endl;
         }
     }
     
@@ -189,18 +246,69 @@ int main() {
         return 1;
     }
     
-    // Set up message hook
-    messageHook = SetWindowsHookEx(WH_GETMESSAGE, MessageProc, NULL, GetWindowThreadProcessId(targetWindow, NULL));
+    // Get the thread ID properly
+    DWORD processId;
+    DWORD threadId = GetWindowThreadProcessId(targetWindow, &processId);
     
-    if (messageHook == NULL) {
-        std::cerr << "Failed to install message hook!" << std::endl;
-        logFile << getCurrentTimestamp() << " - Failed to install message hook. Error code: " 
+    if (threadId == 0) {
+        std::cerr << "Failed to get thread ID for the target window!" << std::endl;
+        logFile << getCurrentTimestamp() << " - Failed to get thread ID. Error code: " 
                 << GetLastError() << std::endl;
         logFile.close();
         return 1;
     }
     
-    std::cout << "Message hook installed successfully." << std::endl;
+    // Log the process and thread IDs for debugging
+    std::cout << "Target window process ID: " << processId << ", thread ID: " << threadId << std::endl;
+    logFile << getCurrentTimestamp() << " - Target process ID: " << processId 
+            << ", thread ID: " << threadId << std::endl;
+    
+    // Try different hook types in sequence if previous ones fail
+    
+    // First try: WH_CALLWNDPROC
+    messageHook = SetWindowsHookEx(WH_CALLWNDPROC, MessageProc, NULL, threadId);
+    
+    if (messageHook == NULL) {
+        DWORD error = GetLastError();
+        std::cerr << "Failed to install WH_CALLWNDPROC hook. Trying WH_KEYBOARD_LL..." << std::endl;
+        logFile << getCurrentTimestamp() << " - Failed to install WH_CALLWNDPROC hook. Error code: " 
+                << error << ". Trying WH_KEYBOARD_LL..." << std::endl;
+        
+        // Second try: WH_KEYBOARD_LL (system-wide low-level keyboard hook)
+        messageHook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardHookProc, NULL, 0);
+        
+        if (messageHook == NULL) {
+            error = GetLastError();
+            std::cerr << "Failed to install keyboard hook! Error code: " << error << std::endl;
+            
+            // Additional error information
+            char* errorMsg = NULL;
+            FormatMessageA(
+                FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                NULL, error, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+                (LPSTR)&errorMsg, 0, NULL);
+                
+            if (errorMsg) {
+                std::cerr << "Error description: " << errorMsg << std::endl;
+                logFile << getCurrentTimestamp() << " - Failed to install keyboard hook. Error: " 
+                        << errorMsg << " (Code: " << error << ")" << std::endl;
+                LocalFree(errorMsg);
+            } else {
+                logFile << getCurrentTimestamp() << " - Failed to install keyboard hook. Error code: " 
+                        << error << std::endl;
+            }
+            
+            logFile.close();
+            return 1;
+        } else {
+            std::cout << "WH_KEYBOARD_LL hook installed successfully." << std::endl;
+            logFile << getCurrentTimestamp() << " - WH_KEYBOARD_LL hook installed successfully." << std::endl;
+        }
+    } else {
+        std::cout << "WH_CALLWNDPROC hook installed successfully." << std::endl;
+        logFile << getCurrentTimestamp() << " - WH_CALLWNDPROC hook installed successfully." << std::endl;
+    }
+    
     std::cout << "Listening for messages from SoftwareKeyBoard..." << std::endl;
     std::cout << "Press Ctrl+C to exit" << std::endl;
     
