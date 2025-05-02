@@ -1,6 +1,7 @@
 #include <windows.h>
 #include <string>
 #include <vector>
+#include <sstream>
 
 // Global variables
 HWND g_hwnd;                     // Main window handle
@@ -11,6 +12,15 @@ HFONT g_hFont;                   // Font handle
 // Forward declarations
 LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
 void DrawReceivedKeys(HDC hdc);
+
+// Function to add a message to our display
+void AddMessage(const std::wstring& message) {
+    g_receivedKeys.push_back(message);
+    if (g_receivedKeys.size() > MAX_DISPLAYED_KEYS) {
+        g_receivedKeys.erase(g_receivedKeys.begin());
+    }
+    InvalidateRect(g_hwnd, NULL, TRUE);
+}
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
@@ -26,13 +36,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     
     RegisterClassW(&wc);
     
-    // Create the window
+    // Create the window - using a very visible title
     g_hwnd = CreateWindowExW(
-        0,                          // Optional window styles
+        WS_EX_TOPMOST,              // Make it a topmost window
         CLASS_NAME,                 // Window class
-        L"Keyboard Event Receiver", // Window title
+        L"*** KEYBOARD EVENT RECEIVER ***", // Window title - distinct
         WS_OVERLAPPEDWINDOW,        // Window style
-        CW_USEDEFAULT, CW_USEDEFAULT, // Position
+        100, 100,                   // Position - more visible than default
         800, 600,                   // Size
         NULL,                       // Parent window    
         NULL,                       // Menu
@@ -42,6 +52,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     
     if (g_hwnd == NULL)
     {
+        MessageBoxW(NULL, L"Failed to create window", L"Error", MB_OK | MB_ICONERROR);
         return 0;
     }
     
@@ -50,14 +61,31 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
                         ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                         DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Arial");
     
-    // Display the window
-    ShowWindow(g_hwnd, nCmdShow);
+    // Display the window with maximum visibility
+    ShowWindow(g_hwnd, SW_SHOWMAXIMIZED);
+    SetForegroundWindow(g_hwnd);
+    UpdateWindow(g_hwnd);
+    
+    // Display our window handle
+    std::wstringstream ss;
+    ss << L"Window Handle: 0x" << std::hex << (DWORD_PTR)g_hwnd;
     
     // Add initial instructions to the display
     g_receivedKeys.push_back(L"Keyboard Event Receiver");
     g_receivedKeys.push_back(L"---------------------------");
-    g_receivedKeys.push_back(L"Press keys or use SoftwareKeyBoard to send input");
+    g_receivedKeys.push_back(ss.str());
+    g_receivedKeys.push_back(L"Use me as the target for SoftwareKeyBoard");
+    g_receivedKeys.push_back(L"Keep this window in focus/foreground!");
     g_receivedKeys.push_back(L"");
+    
+    // Flash the window to get attention
+    FLASHWINFO fInfo;
+    fInfo.cbSize = sizeof(FLASHWINFO);
+    fInfo.hwnd = g_hwnd;
+    fInfo.dwFlags = FLASHW_ALL | FLASHW_TIMERNOFG;
+    fInfo.uCount = 5;
+    fInfo.dwTimeout = 0;
+    FlashWindowEx(&fInfo);
     
     // Message loop
     MSG msg = {};
@@ -93,6 +121,25 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             return 0;
         }
         
+        // Detect when we get or lose focus
+        case WM_ACTIVATE:
+        {
+            if (LOWORD(wParam) == WA_INACTIVE) {
+                AddMessage(L"*** Lost focus - SoftwareKeyBoard may not work! ***");
+                // Flash to alert user
+                FLASHWINFO fInfo;
+                fInfo.cbSize = sizeof(FLASHWINFO);
+                fInfo.hwnd = hwnd;
+                fInfo.dwFlags = FLASHW_ALL;
+                fInfo.uCount = 3;
+                fInfo.dwTimeout = 0;
+                FlashWindowEx(&fInfo);
+            } else {
+                AddMessage(L"*** Got focus - Ready to receive keys ***");
+            }
+            return 0;
+        }
+        
         // Handle individual key presses
         case WM_CHAR:
         {
@@ -118,15 +165,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             }
             
             // Add the key to our vector
-            g_receivedKeys.push_back(keyText);
-            
-            // Limit the number of displayed keys
-            if (g_receivedKeys.size() > MAX_DISPLAYED_KEYS) {
-                g_receivedKeys.erase(g_receivedKeys.begin());
-            }
-            
-            // Force a redraw
-            InvalidateRect(hwnd, NULL, TRUE);
+            AddMessage(keyText);
             return 0;
         }
         
@@ -174,18 +213,24 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
                 }
                 
                 // Add the key to our vector
-                g_receivedKeys.push_back(keyText);
-                
-                // Limit the number of displayed keys
-                if (g_receivedKeys.size() > MAX_DISPLAYED_KEYS) {
-                    g_receivedKeys.erase(g_receivedKeys.begin());
-                }
-                
-                // Force a redraw
-                InvalidateRect(hwnd, NULL, TRUE);
+                AddMessage(keyText);
             }
             return 0;
         }
+
+        // Ensure we always stay on top
+        case WM_KILLFOCUS:
+            // Try to recapture focus after a small delay
+            SetTimer(hwnd, 1, 100, NULL); 
+            return 0;
+
+        case WM_TIMER:
+            if (wParam == 1) {
+                // Attempt to bring us back to foreground
+                SetForegroundWindow(hwnd);
+                KillTimer(hwnd, 1);
+            }
+            return 0;
     }
     
     return DefWindowProc(hwnd, message, wParam, lParam);
